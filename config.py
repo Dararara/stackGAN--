@@ -1,4 +1,4 @@
 image_size = 256
-image_path = 'data/images'
-text_path = 'data/text'
 RESNET_LAYER = 2
+image_path = '/raid/yindu/AttnGAN/data/birds/images'
+text_path = '/raid/yindu/AttnGAN/data/birds/text'
