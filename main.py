@@ -19,6 +19,7 @@ from models import D_NET64, D_NET128, D_NET256
 
 
 
+torch.cuda.set_device(1)
 block = encode_image(512, 4)
 
 data = TextDataset(image_path, text_path)
@@ -52,8 +53,6 @@ for i in range(2):
 
     text, images, text_len = dataiter.next()
     
-
-
     text_len, indices = torch.sort(text_len, 0, True)
 
 
