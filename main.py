@@ -80,7 +80,7 @@ for i in range(2):
     print(dis1.uncondition_DNET(label1).shape)
     print(dis1.condition_DNET(label1, sent_embs).shape)
 
-'''
+
     d = stage2_g(sent_embs, b)
     print(d.shape)
     print(gen2(d).shape)
@@ -97,4 +97,3 @@ for i in range(2):
     print(dis3.uncondition_DNET(label3).shape)
     print(dis3.condition_DNET(label3, sent_embs).shape)
     
-'''
