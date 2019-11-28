@@ -9,35 +9,55 @@ from config import *
 import torch.nn as nn
 from collections import defaultdict
 import re
+import torch.optim as optim
 from torch.autograd import Variable
 
 from models import Init_generate_stage, Generate_image, Next_generate_stage
 from models import encode_image
 from dataloader import TextDataset
 from code_copy import RNN_ENCODER
-from models import D_NET64, D_NET128, D_NET256
+from models import D_NET64, D_NET128, D_NET256, G_NET
+from loss import discriminator_loss, generator_loss
+def define_optimizers(netG, netDs):
+    optimizersD = []
+    for i in range(len(netDs)):
+        opt = optim.Adam(netDs[i].parameters(),
+            lr = 0.001,
+            betas=(0.5, 0.999)
+        )
+        optimizersD.append(opt)
+        #print(opt)
+        #for para in netDs[i].parameters():
+        #    print(para.size())
+        
+    optimizerG = optim.Adam(netG.parameters(), 
+        lr = 0.001,
+        betas=(0.5, 0.999)
+    )
+    return optimizerG, optimizersD
+
+def save_single_image(image, save_path):
+    pass
 
 
-
-torch.cuda.set_device(1)
+torch.cuda.set_device(0)
 block = encode_image(512, 4)
 
 data = TextDataset(image_path, text_path)
 dataloader = DataLoader(data, batch_size=2, shuffle=True)
-dataiter = iter(dataloader)
 
 
-stage1_g = Init_generate_stage(128, 512).cuda()
-gen1 = Generate_image(128).cuda()
-stage2_g = Next_generate_stage(128, 256, 128).cuda()
-stage3_g = Next_generate_stage(128, 256, 64).cuda()
-gen2 = Generate_image(128).cuda()
-gen3 = Generate_image(128).cuda()
+
+
 dis1 = D_NET64().cuda()
 dis2 = D_NET128().cuda()
 dis3 = D_NET256().cuda()
 
 
+g_net = G_NET().cuda()
+d_nets = [dis1, dis2, dis3]
+
+optimizerG, optimizersD = define_optimizers(g_net, d_nets)
 # 这里非常恶心，卡得很死，日后最好能够自己训练一个出来
 text_encoder = RNN_ENCODER(data.word_count, nhidden=256)
 text_encoder_path = 'model/text_encoder200.pth'
@@ -47,28 +67,81 @@ for p in text_encoder.parameters():
     p.requires_grad = False
 print('Load text encoder from: ', text_encoder_path)
 text_encoder.eval()
+text_encoder = text_encoder.cuda()
 
 
-for i in range(2):
+for p in d_nets[0].parameters():
+    print(p.size())
 
-    text, images, text_len = dataiter.next()
+
+batch_size = 2
+noise = Variable(torch.FloatTensor(batch_size, 100)).cuda()
+
+for epoch in range(100):
+    total_error_g = 0
+    total_error_d = 0
+    dataiter = iter(dataloader)
+    for iiii in range(int(data.len/batch_size)):
+        noise.data.normal_(0, 1)
+        print("start load")
+        text, images, text_len = dataiter.next()
+        print('load finish')        
+        text_len, indices = torch.sort(text_len, 0, True)
+        text = text[indices]
+        text = Variable(text).cuda()
+        real_labels = Variable(torch.FloatTensor(batch_size).fill_(1)).cuda()
+        fake_labels = Variable(torch.FloatTensor(batch_size).fill_(0)).cuda()
+
+        for i in range(len(images)):
+            images[i] = Variable(images[i]).cuda()
+        text_len = Variable(text_len).cuda()
+        #print(text.shape, text_len)
+        
+        hidden = text_encoder.init_hidden(2)
+        words_embs, sent_embs = text_encoder(text, text_len, hidden)
+        sent_embs = sent_embs.detach()
+        real_labels = real_labels.detach()
+        fake_labels = fake_labels.detach()
+        
+
+        fake_images = g_net(noise, sent_embs)
+        
+        for i in range(len(d_nets)):
+            d_nets[i].zero_grad()
+            errD = discriminator_loss(d_nets[i], images[i].detach(), fake_images[i].detach(), sent_embs, real_labels.detach(), fake_labels.detach())
+            errD.backward()
+            optimizersD[i].step()
+            total_error_d += errD
+        
+        g_net.zero_grad()
+        errG_total = generator_loss(d_nets, fake_images, sent_embs, real_labels)
+        errG_total.backward()
+        optimizerG.step()
+        total_error_g += errG_total
+    print('total error: g: ', total_error_g, ' d: ', total_error_d)
+    save_single_image(fake_images[2], 'fake' + str(epoch) + '.png')
     
-    text_len, indices = torch.sort(text_len, 0, True)
+
+torch.save(g_net, 'G_NET.pth')
+for i in range(len(d_nets)):
+    torch.save(d_nets[i].state_dict(), 'D_NET' + str(i) + '.pth')
 
 
-    text = text[indices]
 
-    hidden = text_encoder.init_hidden(2)
-    words_embs, sent_embs = text_encoder(text, text_len, hidden)
+    '''
+    i = 2
+    d_nets[i].zero_grad()
+    errD1 = discriminator_loss(d_nets[i], images[i], fake_images[i], sent_embs, real_labels, fake_labels)
+    errD1.backward()
+    optimizersD[i].step()
+
+    '''
+
+
+
+
     
-    text = Variable(text).cuda()
-    for i in range(len(images)):
-        images[i] = Variable(images[i]).cuda()
-    text_len = Variable(text_len).cuda()
-    stage1_g = stage1_g.cuda()
-    print(text.shape, text_len)
-    sent_embs = sent_embs.cuda()
-
+'''
     # 就很绝望，搞不定啊，GPU显存不够用，哭了
     b = stage1_g(sent_embs, sent_embs)
     print(b.shape)
@@ -95,4 +168,4 @@ for i in range(2):
     print('label3 ', label3.shape)
     print(dis3.uncondition_DNET(label3).shape)
     print(dis3.condition_DNET(label3, sent_embs).shape)
-    
+'''

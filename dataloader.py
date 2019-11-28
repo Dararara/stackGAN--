@@ -76,9 +76,12 @@ class TextDataset(Dataset):
     def __getitem__(self, index):
         # 读取十句描述
         # 读取图片并做统一化处理
-        img = Image.open(os.path.join(self.image_path, self.file_names[index]))
+        print('load ', self.file_names[index])
+        print('index: ', index, '/', self.len)
+        img = Image.open(os.path.join(self.image_path, self.file_names[index])).convert('RGB')
+        print(self.file_names[index])
         img = self.image_transform(img)
-        
+        #print(type(img))
         
         imgs = []
         size = [64, 128, 256]
@@ -86,7 +89,10 @@ class TextDataset(Dataset):
             resize_img = transforms.Resize(i)(img)
             resize_img = self.norm(resize_img)
             imgs.append(np.array(resize_img))
+            #print(np.array(resize_img).shape)
         
+
+
         #print(type(self.texts))
         text = self.texts[index][0]
         text_len = len(text)
@@ -95,11 +101,11 @@ class TextDataset(Dataset):
             text.append(0)
         text = text[:20]
         text = torch.LongTensor(text)
-        
+        print('load ', self.file_names[index], 'finish')
         return text, imgs, text_len
     
     def __len__(self):
-        return 1000
+        return self.len
 
 
 

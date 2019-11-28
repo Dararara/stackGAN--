@@ -2,6 +2,7 @@ import torch
 from config import *
 import torch.nn as nn
 import numpy as np
+from torch.autograd import Variable
 
 
 class GLU(nn.Module):
@@ -69,6 +70,7 @@ def upSamples(channel_num, times):
 class Init_generate_stage(nn.Module):
     # 输入一个向量，把向量用fc展开，
     def __init__(self, condition_dim, input_dim):
+        # 128, 100
         super(Init_generate_stage, self).__init__()
 
         self.condition_dim = condition_dim
@@ -85,11 +87,11 @@ class Init_generate_stage(nn.Module):
         )
         # 128 x 64 x 64的
         # 我们在这里会扩展为128*16 x 4 x 4
-        condition_dim = self.condition_dim
         self.upSamples = upSamples(self.condition_dim * 16, 4)
 
     def forward(self, input, noise):
         real_input = torch.cat((input, noise), 1)
+        #print(real_input.shape, self.input_dim)
         output = self.full_connect(real_input)
         output = output.view(-1, self.condition_dim * 16, 4, 4)
         output = self.upSamples(output) 
@@ -172,9 +174,6 @@ class Next_generate_stage(nn.Module):
         return output
 
 
-class G_net(nn.Module):
-    def __init__(self):
-        pass
 
 def con3x3_leakRelu(in_planes, out_planes):
     block = nn.Sequential(
@@ -256,3 +255,57 @@ def downBlock(input_channel, output_channel):
         nn.LeakyReLU(0.2, inplace= True)
     )
     return block
+
+class CA_NET(nn.Module):
+    # 因为我们的latency condition有很多维，但是数据却不够，导致训练的模型会出现不连续性，很多情况顾及不到
+    # 所以我们引入了一个数据增强的机制，增强网络的鲁棒性
+    def __init__(self):
+        super(CA_NET, self).__init__()
+        self.sent_embed_dim = 256
+        self.condition = 100
+        self.fc = nn.Linear(self.sent_embed_dim, self.condition * 4, bias = True)
+        self.relu = GLU()
+
+    def encode(self, sent_embedding):
+        # 400 -> 200
+        x = self.relu(self.fc(sent_embedding))
+        mu = x[:, :self.condition]
+        logvar = x[:, self.condition:]
+        return mu, logvar
+
+    def reparametrize(self, mu, logvar):
+        # 这里就是数据增强的部分，eps引入随机噪声
+        std = logvar.mul(0.5).exp_()
+        eps = torch.cuda.FloatTensor(std.size()).normal_()
+        eps = Variable(eps)
+        return eps.mul(std).add_(mu)
+
+    def forward(self, sent_embedding):
+        mu, logvar = self.encode(sent_embedding)
+        condition_code = self.reparametrize(mu, logvar)
+        return condition_code
+
+
+class G_NET(nn.Module):
+    def __init__(self):
+        super(G_NET, self).__init__()
+        self.ca_net = CA_NET()
+        self.stage1_g = Init_generate_stage(128, 200)
+        self.stage2_g = Next_generate_stage(128, 100, 128)
+        self.stage3_g = Next_generate_stage(128, 100, 64)
+        self.gen1 = Generate_image(128)
+        self.gen2 = Generate_image(128)
+        self.gen3 = Generate_image(128)
+    
+    def forward(self, noise, sent_embs):
+        
+        condition_code = self.ca_net(sent_embs)
+        #print(type(condition_code), type(noise))
+        image_condition1 = self.stage1_g(condition_code, noise)
+        image_condition2 = self.stage2_g(condition_code, image_condition1)
+        image_condition3 = self.stage3_g(condition_code, image_condition2)
+        fake_images = []
+        fake_images.append(self.gen1(image_condition1))
+        fake_images.append(self.gen2(image_condition2))
+        fake_images.append(self.gen3(image_condition3))
+        return fake_images
